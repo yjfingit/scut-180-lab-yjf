@@ -298,6 +298,55 @@ export all_proxy=socks5h://127.0.0.1:6666
 并加 `nameserver-policy` 走加密 DNS。重跑 `sync_sub.py --offline` + `proxy reload`。
 新增域名照此办理即可，不必等机场更新。
 
+## 推送到 GitHub（本机无凭证时的解法）
+
+180 机**没有 GitHub SSH key，也没有 gh CLI**，而 HTTPS 推送不接受密码。
+在无图形界面的服务器上给浏览器授权，用 **GitHub Device Flow**：
+
+**原理**：180 机向 GitHub 申请一次性 `user_code`，用户在自己电脑的浏览器里填码授权，
+180 机轮询换取 token。用户密码不经过任何中间方。
+
+```bash
+# 1. 发起授权（client_id 是 gh CLI 的公开 ID，可长期用）
+curl -s -X POST -H "Accept: application/json" \
+  -d "client_id=178c6fc778ccc68e1d6a&scope=repo" \
+  https://github.com/login/device/code
+# 返回 user_code（如 30E7-9C14）、device_code、expires_in=899
+
+# 2. 把 user_code 告诉用户，让其在浏览器打开 https://github.com/login/device 填入授权
+#    （用 present_files 直接打开该 URL）
+
+# 3. 后台轮询换取 token（authorization_pending 表示还没授权，继续等）
+curl -s -X POST -H "Accept: application/json" \
+  -d "client_id=178c6fc778ccc68e1d6a" \
+  -d "device_code=<device_code>" \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:device_code" \
+  https://github.com/login/oauth/access_token
+```
+
+**推送后必做的清理**（否则 token 明文留在仓库配置里）：
+
+```bash
+cd <repo>
+TOK=$(cat <token文件>)
+git remote set-url origin https://<user>:${TOK}@github.com/<user>/<repo>.git
+git push -u origin main
+# 立刻去掉明文 token
+git remote set-url origin https://github.com/<user>/<repo>.git
+# 转存到 600 权限的凭证文件，以后 push 免输
+git config --global credential.helper store
+printf "https://<user>:%s@github.com\n" "$TOK" > ~/.git-credentials
+chmod 600 ~/.git-credentials
+shred -u <token文件>                  # 销毁临时明文
+grep -r "gho_\|ghp_\|github_pat" .git/config   # 确认无残留
+```
+
+**推送后必须验证**（不能只看 push 成功）：对比本地/远端 commit SHA +
+逐文件 `git hash-object` vs API 返回的 `sha` + 干净目录 `git clone` 一次。
+
+**注意**：用户可能误读授权页的 "GitHub staff will never give you a code" ——
+那是防钓鱼提示，不是"等别人发码"。要主动解释 `user_code` 是我方申请的。
+
 ## 参考
 
 - `references/platform-notes.md` — 180 机平台细节、权限矩阵、踩坑记录
