@@ -55,12 +55,51 @@
 
 ## 软件栈
 
-**有**：`python3`(3.12.3)、`tmux`、`screen`、`git`、`rsync`、`curl`、`wget`、`nvcc`、`gcc`、`docker`（无权限）、`tailscale`
+**有**：`python3`(3.12.3)、`tmux`、`screen`、`git`、`rsync`、`curl`、`wget`、`nvcc`、`gcc`、`unzip`、`docker`（无权限）、`tailscale`
 
 **无**：`conda` / `mamba` / `micromamba` / `uv` / `pip` / `slurm`(`sbatch`/`squeue`/`srun`)
 
+**也没有 `ffmpeg` / `ffprobe` / `7z`**（系统级无，家目录内也搜不到）。
+视频处理任务需要先自己搞到 ffmpeg，见下节。
+
 系统 python 受 PEP668 保护（`/usr/lib/python3.12/EXTERNALLY-MANAGED`），
 **不能** `pip install --user`，必须自建 venv。
+
+## 没有 ffmpeg 怎么办（视频切片/转码/探测）
+
+系统里没有任何 ffmpeg，且无 sudo 装不了。**最快解法是从 PyPI 拿静态二进制**：
+
+```bash
+/home/yangjuanfeng/lab/envs/venv/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple imageio-ffmpeg
+```
+
+装完即得到一个 **ffmpeg 7.0.2 静态版**（80 MB，johnvansickle 构建，自带 `select`
+滤镜与 `mjpeg`/`libx264` 编码器），路径通过包接口取：
+
+```python
+import imageio_ffmpeg
+FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
+# /home/yangjuanfeng/lab/envs/venv/lib/python3.12/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v7.0.2
+```
+
+**注意这个包只带 ffmpeg，不带 ffprobe。** 需要探测视频元数据（时长/fps/分辨率）时，
+解析 `ffmpeg -hide_banner -i <file>` 的 stderr 即可，无需 ffprobe：
+
+- 时长：`Duration: HH:MM:SS.ss`
+- 编码：`Stream #0:0: Video: h264`
+- 分辨率 / fps：取含 `Video:` 的那一行，`(\d+)x(\d+)` 与 `([\d.]+) fps`
+
+**每 10 帧抽 1 张**的可靠写法（`-fps_mode passthrough` 等价于旧版 `-vsync 0`）：
+
+```bash
+$FFMPEG -hide_banner -loglevel error -nostdin -threads 6 -i in.mp4 \
+  -vf "select=not(mod(n\,10))" -fps_mode passthrough -q:v 2 \
+  -start_number 0 out/seq_%06d.jpg
+```
+
+ffmpeg 的 `%06d` 是**输出序号**（0,1,2,…），不是源帧号。若想让文件名直接对应源帧号，
+按 `源帧号 = 输出序号 × stride` 重命名一次即可（实测逐像素复核一致）。
+多视频并行时给每个 ffmpeg `-threads 6`，104 核可同时跑 15 个进程不冲突。
 
 ## 判空闲 GPU 的正确方法
 
@@ -78,6 +117,8 @@
 ## 踩坑记录
 
 - **`utilization` 不可信**：见上。
+- **没有 ffmpeg**：系统与家目录内均无，需 `pip install imageio-ffmpeg` 拿静态二进制（只带 ffmpeg，不带 ffprobe）。
+- **ffmpeg 的 `%06d` 是输出序号不是源帧号**：想要文件名对应源帧号需按 `序号 × stride` 重命名。
 - **`/mnt/data1` 看似可用实则只读**：属 liupeng，755，写不进去。
 - **777 目录是隐形地雷**：`/home/backup` 等权限开放，系统不拦，只能靠围栏自觉。
 - **长任务必须 tmux**：SSH 断连会杀掉前台进程。

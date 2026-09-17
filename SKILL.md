@@ -347,6 +347,34 @@ grep -r "gho_\|ghp_\|github_pat" .git/config   # 确认无残留
 **注意**：用户可能误读授权页的 "GitHub staff will never give you a code" ——
 那是防钓鱼提示，不是"等别人发码"。要主动解释 `user_code` 是我方申请的。
 
+## 视频切片（帧抽取）
+
+把视频按固定间隔抽帧、产出可直接用于标注的图片集。**180 机没有 ffmpeg**，
+先按 `references/platform-notes.md` 的「没有 ffmpeg 怎么办」装 `imageio-ffmpeg` 拿到静态二进制。
+
+两个脚本配套使用，**先探测再抽取**（探测能提前暴露分辨率/帧率异常和磁盘压力）：
+
+```bash
+PY=/home/yangjuanfeng/lab/envs/venv/bin/python
+
+# ① 探测：时长 / fps / 分辨率 / 预计切片数，并落一份 json
+$PY scripts/probe_videos.py <视频目录> --stride 10 --json <日志目录>/video_meta.json
+
+# ② 抽取：每个视频输出到一个子目录，文件名 = 源帧号
+$PY scripts/extract_frames.py --video-dir <视频目录> --out-dir <图片目录> \
+    --stride 10 --quality 2 --workers 15 --threads 6 \
+    --manifest <日志目录>/frame_extract.json
+```
+
+要点：
+
+- **先 `--limit 1` 小样验证**，确认帧号间隔、尺寸、单张体积都正常，再跑全量。
+- 输出布局 `<out>/<视频名>/<源帧号:06d>.jpg`；**源帧号**便于反推时间点（帧号/fps = 秒）。
+- ffmpeg 的 `%06d` 是输出序号，脚本内部按 `序号 × stride` 重命名成源帧号。
+- 104 核可安全并行 15 个 ffmpeg（每个 `-threads 6`）。实测 3.2 G / 22226 帧约 34 秒。
+- **务必核对每个视频的实际产出数与探测预测数是否一致**，不一致说明有解码错误。
+- 抽完做一次**独立复核**：用 `select=eq(n\,K)` 单独抽某帧，与产物比对应逐像素一致。
+
 ## 参考
 
 - `references/platform-notes.md` — 180 机平台细节、权限矩阵、踩坑记录
@@ -355,3 +383,6 @@ grep -r "gho_\|ghp_\|github_pat" .git/config   # 确认无残留
 
 - `scripts/guard.sh` — 安全围栏校验（路径三档分区 + 命令危险模式扫描）
 - `scripts/gpu_probe.py` — 精准判卡，输出每卡进程表与推荐卡
+- `scripts/probe_videos.py` — 探测视频元数据，估算切片数量（无需 ffprobe）
+- `scripts/extract_frames.py` — 按步长抽帧，每视频一个子目录，文件名用源帧号
+- `scripts/make_contact_sheet.py` — 生成预览拼图，肉眼快速核验切片质量
